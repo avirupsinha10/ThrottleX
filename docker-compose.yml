@@ -1,0 +1,109 @@
+version: '3.9'
+
+networks:
+  throttlex-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  # ─── ThrottleX Application ───────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      target: production
+    container_name: throttlex-app
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DEFAULT_ALGORITHM: sliding-window-counter
+      DEFAULT_LIMIT: "100"
+      DEFAULT_WINDOW_MS: "60000"
+      FALLBACK_ALLOWED: "true"
+      CB_FAILURE_THRESHOLD: "5"
+      CB_SUCCESS_THRESHOLD: "2"
+      CB_TIMEOUT: "30000"
+      LOG_LEVEL: info
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - throttlex-net
+    restart: unless-stopped
+    deploy:
+      replicas: 2   # demonstrates horizontal scaling
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+
+  # ─── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: throttlex-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+        --appendonly yes
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save 60 1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - throttlex-net
+    restart: unless-stopped
+
+  # ─── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: throttlex-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    networks:
+      - throttlex-net
+    restart: unless-stopped
+
+  # ─── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: throttlex-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: throttlex
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/throttlex.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboard.json:/var/lib/grafana/dashboards/throttlex.json:ro
+    depends_on:
+      - prometheus
+    networks:
+      - throttlex-net
+    restart: unless-stopped

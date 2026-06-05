@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: throttlex-local
+
+scrape_configs:
+  - job_name: throttlex
+    static_configs:
+      - targets:
+          - app:3000
+    metrics_path: /metrics
+    scrape_interval: 5s
+
+  - job_name: redis
+    static_configs:
+      - targets:
+          - redis:6379
